@@ -38,8 +38,11 @@ PiHut Gamepad keys w/ pygame:
 
 
 import pygame
+import serial
 import sys
 from random import randint
+
+from ClubMateMapper import ClubMateMapper, HORIZONTAL_2x5, CRATE_VERTICAL
 
 
 class Ball(object):
@@ -57,6 +60,7 @@ class Ball(object):
         pygame.draw.ellipse(screen, self.colour, self.rect)
 
     def accelerate(self):
+        return
         if self.speed < 3:
             self.speed += 0.2
 
@@ -67,6 +71,12 @@ class Ball(object):
     @property
     def rect(self):                             # not important
         return pygame.Rect(self.x, self.y, self.width, self.height)
+
+    @property
+    def next_pos_rect(self):
+        x = self.x + self.x_change * self.speed
+        y = self.y + self.y_change * self.speed
+        return pygame.Rect(x, y, self.width, self.height)
 
 
 class Paddle(object):
@@ -131,7 +141,14 @@ class Pong(object):
     COLOURS = {"BLACK":   (0,   0,   0),
                "WHITE": (255, 255, 255), }
 
-    def __init__(self):
+    def __init__(self, external_output=None):
+        self.mate_mapper = ClubMateMapper(HORIZONTAL_2x5, CRATE_VERTICAL)
+
+        if external_output is None:
+            self.external_output = open("/dev/null", "wb")
+        else:
+            self.external_output = external_output
+
         pygame.init()
         for _ in range(pygame.joystick.get_count()):
             pygame.joystick.Joystick(_).init()
@@ -142,11 +159,10 @@ class Pong(object):
         ball_x = randint(9, 10)
         ball_y = randint(4, 5)
         self.ball = Ball(ball_x, ball_y, 1, 1, 1, 1, Pong.COLOURS["BLACK"])
-        self.player1 = Paddle(1, HEIGHT/2 - 1,  1, 3, 1, HEIGHT,
+        self.player1 = Paddle(1, HEIGHT/2 - 1,  1, 10, 1, HEIGHT,
                               Pong.COLOURS["BLACK"], self)
-        self.player2 = Paddle(WIDTH - 2, HEIGHT/2 - 1,  1, 3, 1, HEIGHT,
+        self.player2 = Paddle(WIDTH - 2, HEIGHT/2 - 1,  1, 10, 1, HEIGHT,
                               Pong.COLOURS["BLACK"], self)
-#        self.score = 0
 
     def pause(self, pauser):
         clock = pygame.time.Clock()
@@ -156,8 +172,8 @@ class Pong(object):
                     pygame.quit()
                     quit()
                 if event.type == pygame.JOYBUTTONDOWN:
-                    if event.button == 9 and event.joy == pauser:
-                        self.play()
+                    if event.button == 9 and pauser == event.joy:
+                            self.play()
                     elif event.joy == 0:
                         self.player1.key_handler(event)
                     elif event.joy == 1:
@@ -172,7 +188,7 @@ class Pong(object):
     def play(self):
         pygame.time.set_timer(1, 5000)
         while True:
-            self.clock.tick(50)
+            self.clock.tick(5)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
@@ -182,13 +198,13 @@ class Pong(object):
                         self.player1.key_handler(event)
 
                         # SOLO MODE
-                        if event.type == pygame.JOYBUTTONDOWN and event.button == 9:
-                            pass  # avoid triggering double pause if I controll both paddles
-                        else:
-                            self.player2.key_handler(event)
+                        # if event.type == pygame.JOYBUTTONDOWN and event.button == 9:
+                        #     pass  # avoid triggering double pause if I controll both paddles
+                        # else:
+                        #     self.player2.key_handler(event)
 
-                    """elif event.joy == 1:
-                        self.player2.key_handler(event)"""
+                    elif event.joy == 1:
+                        self.player2.key_handler(event)
                 # if event.type in (pygame.KEYDOWN, pygame.KEYUP):
                 #    self.player1.key_handler(event)
                 #    self.player2.key_handler(event)
@@ -197,10 +213,27 @@ class Pong(object):
             self.collision_handler()
             self.draw()
 
+            frame = [
+                [
+                    self.screen.get_at((x, y)) == (0, 0, 0, 255) and 1 or 0
+                    for x in range(20)
+                ] for y in range(10)
+            ]
+            self.external_output.write(
+                self.mate_mapper.magic_func(frame)
+            )
+
+
+
     def collision_handler(self):
-        if self.ball.rect.colliderect(self.player1.rect):
+        if self.ball.y + self.ball.height >= self.screen.get_height():
+            self.ball.y_change = -abs(self.ball.y_change)
+        elif self.ball.y <= 0:
+            self.ball.y_change = abs(self.ball.y_change)
+
+        if self.ball.next_pos_rect.colliderect(self.player1.rect):
             self.ball.x_change = -self.ball.x_change
-        elif self.ball.rect.colliderect(self.player2.rect):
+        elif self.ball.next_pos_rect.colliderect(self.player2.rect):
             self.ball.x_change = -self.ball.x_change
 
         if self.ball.x + self.ball.width >= self.screen.get_width():
@@ -209,11 +242,6 @@ class Pong(object):
         elif self.ball.x <= 0:
             pygame.quit()
             sys.exit()
-
-        if self.ball.y + self.ball.height >= self.screen.get_height():
-            self.ball.y_change = -abs(self.ball.y_change)
-        elif self.ball.y <= 0:
-            self.ball.y_change = abs(self.ball.y_change)
 
     def draw(self):
         self.screen.fill(Pong.COLOURS["WHITE"])         # not important
@@ -227,7 +255,10 @@ class Pong(object):
 
 
 def start():
-    Pong().play()
+    arduino = serial.Serial(port='/dev/ttyUSB1', baudrate=115200)
+    arduino.write(bytes([0]) * 25)
+    Pong(external_output=arduino).play()
+    arduino.close()
 
 
 if __name__ == "__main__":
